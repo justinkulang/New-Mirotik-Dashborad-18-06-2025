@@ -128,7 +128,7 @@ def get_mikrotik_api():
             g.mikrotik_api = g.mikrotik_connection
             logger.info("Mikrotik connection established.")
         except (TrapError, socket.error, Exception) as e:
-            logger.error(f"Mikrotik connection failed: {e}")
+            logger.error("Mikrotik connection failed", exc_info=True)
             raise ConnectionError(f"Router connection failed: {e}")
     return g.mikrotik_api
 
@@ -158,10 +158,10 @@ class RouterOSService:
 
             return True, f"Connected successfully to {router_name}"
         except ConnectionError as e:
-            logger.error(f"Connection test failed: {e}")
+            logger.error(f"Connection test failed: {e}") # This is a ConnectionError, already specific.
             return False, f"Connection failed: {e}"
         except Exception as e:
-            logger.error(f"Unexpected error during connection test: {str(e)}")
+            logger.error("Unexpected error during connection test", exc_info=True)
             return False, f"Unexpected error during connection test: {str(e)}"
 
     def get_hotspot_users(self) -> list:
@@ -174,7 +174,7 @@ class RouterOSService:
             ))
             return users
         except Exception as e:
-            logger.error(f"Error getting users: {str(e)}")
+            logger.error("Error getting users", exc_info=True)
             return []
 
     def create_hotspot_user(self, user_data: dict) -> tuple[bool, str]:
@@ -185,8 +185,11 @@ class RouterOSService:
             valid_user_data = {k: v for k, v in user_data.items() if v is not None}
             api.path('ip', 'hotspot', 'user').add(**valid_user_data)
             return True, "User created successfully"
-        except (TrapError, Exception) as e:
-            logger.error(f"Error creating user: {str(e)}")
+        except (TrapError, Exception) as e: # TrapError is specific, Exception is generic
+            if isinstance(e, TrapError):
+                logger.error(f"Error creating user (TrapError): {str(e)}")
+            else:
+                logger.error("Error creating user", exc_info=True)
             return False, f"Mikrotik Error: {str(e)}"
 
     def edit_hotspot_user(self, username: str, new_data: dict) -> tuple[bool, str]:
@@ -201,7 +204,10 @@ class RouterOSService:
             api.path('ip', 'hotspot', 'user').set(**new_data, **{'.id': user_id})
             return True, "User updated successfully"
         except (TrapError, Exception) as e:
-            logger.error(f"Error editing user '{username}': {str(e)}")
+            if isinstance(e, TrapError):
+                logger.error(f"Error editing user '{username}' (TrapError): {str(e)}")
+            else:
+                logger.error(f"Error editing user '{username}'", exc_info=True)
             return False, f"Mikrotik Error: {str(e)}"
 
     def delete_hotspot_user(self, username: str) -> tuple[bool, str]:
@@ -216,7 +222,10 @@ class RouterOSService:
             api.path('ip', 'hotspot', 'user').remove(user_id)
             return True, "User deleted successfully"
         except (TrapError, Exception) as e:
-            logger.error(f"Error deleting user '{username}': {str(e)}")
+            if isinstance(e, TrapError):
+                logger.error(f"Error deleting user '{username}' (TrapError): {str(e)}")
+            else:
+                logger.error(f"Error deleting user '{username}'", exc_info=True)
             return False, f"Mikrotik Error: {str(e)}"
     
     def get_active_sessions(self) -> list:
@@ -229,7 +238,7 @@ class RouterOSService:
             ))
             return sessions
         except Exception as e:
-            logger.error(f"Error getting active sessions: {str(e)}")
+            logger.error("Error getting active sessions", exc_info=True)
             return []
 
     def disconnect_user(self, active_id: str) -> tuple[bool, str]:
@@ -239,7 +248,10 @@ class RouterOSService:
             api.path('ip', 'hotspot', 'active').remove(active_id)
             return True, "User disconnected successfully"
         except (TrapError, Exception) as e:
-            logger.error(f"Error disconnecting user: {str(e)}")
+            if isinstance(e, TrapError):
+                logger.error(f"Error disconnecting user (TrapError): {str(e)}")
+            else:
+                logger.error("Error disconnecting user", exc_info=True)
             return False, f"Mikrotik Error: {str(e)}"
 
     def get_user_profiles(self) -> list:
@@ -252,7 +264,7 @@ class RouterOSService:
             ))
             return profiles
         except Exception as e:
-            logger.error(f"Error getting profiles: {str(e)}")
+            logger.error("Error getting profiles", exc_info=True)
             return []
     
     def create_hotspot_profile(self, profile_data: dict) -> tuple[bool, str]:
@@ -263,7 +275,10 @@ class RouterOSService:
             api.path('ip', 'hotspot', 'user', 'profile').add(**data_to_add)
             return True, f"Profile '{profile_data['name']}' created successfully."
         except (TrapError, Exception) as e:
-            logger.error(f"Error creating profile: {str(e)}")
+            if isinstance(e, TrapError):
+                logger.error(f"Error creating profile (TrapError): {str(e)}")
+            else:
+                logger.error("Error creating profile", exc_info=True)
             return False, f"Mikrotik Error: {str(e)}"
 
     def edit_hotspot_profile(self, profile_id: str, new_data: dict) -> tuple[bool, str]:
@@ -273,7 +288,10 @@ class RouterOSService:
             api.path('ip', 'hotspot', 'user', 'profile').set(**new_data, **{'.id': profile_id})
             return True, "Profile updated successfully."
         except (TrapError, Exception) as e:
-            logger.error(f"Error editing profile: {str(e)}")
+            if isinstance(e, TrapError):
+                logger.error(f"Error editing profile (TrapError): {str(e)}")
+            else:
+                logger.error("Error editing profile", exc_info=True)
             return False, f"Mikrotik Error: {str(e)}"
 
     def delete_hotspot_profile(self, profile_id: str) -> tuple[bool, str]:
@@ -283,7 +301,10 @@ class RouterOSService:
             api.path('ip', 'hotspot', 'user', 'profile').remove(profile_id)
             return True, "Profile deleted successfully."
         except (TrapError, Exception) as e:
-            logger.error(f"Error deleting profile: {str(e)}")
+            if isinstance(e, TrapError):
+                logger.error(f"Error deleting profile (TrapError): {str(e)}")
+            else:
+                logger.error("Error deleting profile", exc_info=True)
             return False, f"Mikrotik Error: {str(e)}"
     
     def _parse_ros_time(self, time_str: str) -> int:
@@ -330,9 +351,9 @@ class RouterOSService:
                         api.path('ip', 'hotspot', 'user').remove(user['.id'])
                         deleted_count += 1
                         logger.info(f"Deleted expired user '{user['name']}'")
-                    except Exception as e:
+                    except Exception as e: # This is a nested exception, log with traceback for clarity.
                         errors.append(user['name'])
-                        logger.error(f"Failed to delete expired user '{user['name']}': {e}")
+                        logger.error(f"Failed to delete expired user '{user['name']}' during bulk operation", exc_info=True)
             
             message = f"Successfully deleted {deleted_count} expired user(s)."
             if errors:
@@ -340,7 +361,7 @@ class RouterOSService:
             
             return True, message, deleted_count
         except Exception as e:
-            logger.error(f"Error during expired user cleanup: {str(e)}")
+            logger.error("Error during expired user cleanup", exc_info=True)
             return False, f"An unexpected error occurred: {str(e)}", 0
 
 router_os_service = RouterOSService()
@@ -606,7 +627,7 @@ def export_users_route():
                 pdf_file = WeasyHTML(string=html_content).write_pdf()
                 return Response(pdf_file, mimetype="application/pdf", headers={"Content-disposition": f"attachment; filename=vouchers_{profile_filter or 'all'}.pdf"})
             except Exception as e:
-                 logger.error(f"Failed to generate PDF: {e}")
+                 logger.error("Failed to generate PDF", exc_info=True)
                  return jsonify({"success": False, "message": f"An unexpected error occurred during PDF generation: {e}"}), 500
         else: # html_voucher
             return Response(html_content, mimetype="text/html")

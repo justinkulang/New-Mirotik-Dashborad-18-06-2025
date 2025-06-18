@@ -470,6 +470,7 @@ async function apiCall(endpoint, options = {}) {
 async function checkConnection() {
     const statusEl = document.getElementById('connectionStatus');
     const result = await apiCall('/test-connection', { method: 'POST' });
+    console.log('checkConnection result:', result);
     if (result && result.success) {
         statusEl.className = 'connected';
         statusEl.innerHTML = `<i class="fas fa-check-circle"></i><span> ${result.message}</span>`;
@@ -491,8 +492,10 @@ async function loadUsers(silent = false) {
     const tbody = document.querySelector('#usersTable tbody');
     if (!silent) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;"><div class="loading-spinner"></div></td></tr>`;
     const data = await apiCall('/users');
+    console.log('loadUsers - data received:', JSON.stringify(data));
     if (data && data.users) {
         currentUsers = data.users;
+        console.log('loadUsers - currentUsers before filterAndDisplayUsers:', JSON.stringify(currentUsers));
         filterAndDisplayUsers();
     } else {
         tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;">Could not load users.</td></tr>`;
@@ -501,6 +504,7 @@ async function loadUsers(silent = false) {
 
 async function loadProfiles() {
     const data = await apiCall('/profiles');
+    console.log('loadProfiles - data received:', JSON.stringify(data));
     if (data && data.profiles) {
         currentProfiles = data.profiles;
         // Populate all profile dropdowns
@@ -520,28 +524,35 @@ async function loadProfiles() {
 
 async function loadActiveSessions() {
     const data = await apiCall('/active-sessions');
+    console.log('loadActiveSessions - data received:', JSON.stringify(data));
     const tbody = document.querySelector('#sessionsTable tbody');
     if (data && data.sessions) {
         currentSessions = data.sessions;
+        console.log('loadActiveSessions - currentSessions to render:', JSON.stringify(currentSessions));
         if (currentSessions.length === 0) {
             tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;">No active sessions found.</td></tr>`;
             return;
         }
-        tbody.innerHTML = currentSessions.map(s => `
+        try {
+            tbody.innerHTML = currentSessions.map(s => `
             <tr>
-                <td>${s.user || ''}</td>
-                <td>${s.address || ''}</td>
-                <td>${s['mac-address'] || ''}</td>
-                <td>${s.uptime || ''}</td>
+                <td>${String(s.user || '')}</td>
+                <td>${String(s.address || '')}</td>
+                <td>${String(s['mac-address'] || '')}</td>
+                <td>${String(s.uptime || '')}</td>
                 <td>${formatBytes(s['bytes-in'])} / ${formatBytes(s['bytes-out'])}</td>
-                <td>${s['session-time-left'] || 'Unlimited'}</td>
+                <td>${String(s['session-time-left'] || 'Unlimited')}</td>
                 <td>
-                    <button class="btn btn-danger btn-sm" onclick="disconnectUser('${s['.id']}')">
+                    <button class="btn btn-danger btn-sm" onclick="disconnectUser('${String(s['.id'] || '')}')">
                         <i class="fas fa-times"></i> Disconnect
                     </button>
                 </td>
             </tr>
-        `).join('');
+            `).join('');
+        } catch (e) {
+            console.error('Error rendering session rows:', e);
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">Error displaying sessions. Check console.</td></tr>';
+        }
     } else {
         tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;">Could not load sessions.</td></tr>`;
     }
@@ -560,6 +571,7 @@ async function loadConfig() {
 
 // --- Display & Filtering ---
 function filterAndDisplayUsers() {
+    console.log('filterAndDisplayUsers - currentUsers at start:', JSON.stringify(currentUsers));
     const search = document.getElementById('userSearchInput').value.toLowerCase();
     const profile = document.getElementById('userFilterProfile').value;
     const status = document.getElementById('userFilterStatus').value;
@@ -568,9 +580,10 @@ function filterAndDisplayUsers() {
         const isDisabled = user.disabled === 'true';
         const statusMatch = (status === '') || (status === 'active' && !isDisabled) || (status === 'disabled' && isDisabled);
         const profileMatch = (profile === '') || (user.profile === profile);
-        const searchMatch = (user.name.toLowerCase().includes(search) || (user.comment && user.comment.toLowerCase().includes(search)));
+        const searchMatch = (String(user.name).toLowerCase().includes(search) || (user.comment && String(user.comment).toLowerCase().includes(search)));
         return statusMatch && profileMatch && searchMatch;
     });
+    console.log('filterAndDisplayUsers - filtered users:', JSON.stringify(filtered));
     
     const tbody = document.querySelector('#usersTable tbody');
     if (filtered.length === 0) {
@@ -578,7 +591,8 @@ function filterAndDisplayUsers() {
         return;
     }
 
-    tbody.innerHTML = filtered.map(user => `
+    try {
+        tbody.innerHTML = filtered.map(user => `
         <tr>
             <td>${user.name}</td>
             <td>${user.profile || ''}</td>
@@ -593,16 +607,24 @@ function filterAndDisplayUsers() {
                 <button class="btn btn-danger btn-sm" onclick="deleteUser('${user.name}')"><i class="fas fa-trash"></i></button>
             </td>
         </tr>
-    `).join('');
+        `).join('');
+    } catch (e) {
+        console.error('Error rendering user rows:', e);
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;">Error displaying users. Check console.</td></tr>';
+    }
 }
 
 function displayProfiles() {
+    console.log('displayProfiles - currentProfiles at start:', JSON.stringify(currentProfiles));
     const tbody = document.querySelector('#profilesTable tbody');
      if (currentProfiles.length === 0) {
         tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;">No profiles found.</td></tr>`;
         return;
     }
-    tbody.innerHTML = currentProfiles.map(p => `
+    // tbody.innerHTML assignment is now direct, without the try...catch
+    tbody.innerHTML = currentProfiles.map(p => {
+        console.log('Processing profile for display:', JSON.stringify(p)); // KEEP THIS LOG
+        return `
         <tr>
             <td>${p.name}</td>
             <td>${p['rate-limit'] || 'N/A'}</td>
@@ -613,7 +635,9 @@ function displayProfiles() {
                  <button class="btn btn-danger btn-sm" onclick="deleteProfile('${p['.id']}', '${p.name}')"><i class="fas fa-trash"></i></button>
             </td>
         </tr>
-    `).join('');
+        `;
+    }).join('');
+    // The console.log that was after the try...catch has been removed.
 }
 
 // --- Event Handlers & Actions ---
@@ -639,11 +663,12 @@ async function handleConfigSave(e) {
 
 async function handleCreateUser(e) {
     e.preventDefault();
+    const timeLimitValue = document.getElementById('timeLimit').value;
     const payload = {
         name: document.getElementById('username').value,
         password: document.getElementById('password').value,
         profile: document.getElementById('profile').value,
-        'limit-uptime': document.getElementById('timeLimit').value,
+        'limit-uptime': timeLimitValue ? timeLimitValue : null,
         'limit-bytes-total': document.getElementById('dataLimit').value ? parseInt(document.getElementById('dataLimit').value) * 1024 * 1024 : null,
         comment: document.getElementById('comment').value,
     };
@@ -653,7 +678,10 @@ async function handleCreateUser(e) {
         e.target.reset();
         await loadUsers();
         await loadDashboardStats();
+    } else if (result) { // Handle cases where result exists but success is false
+        showAlert('globalAlert', 'danger', result.message);
     }
+    // If result is null, apiCall already showed an error.
 }
 
 async function handleBulkCreateUsers(e) {
@@ -700,7 +728,10 @@ async function handleEditUser(e) {
         showAlert('globalAlert', 'success', 'User updated successfully!');
         closeModal('userModal');
         await loadUsers();
+    } else if (result) { // Handle cases where result exists but success is false
+        showAlert('globalAlert', 'danger', result.message);
     }
+    // If result is null, apiCall already showed an error.
 }
 
 async function handleProfileSave(e) {
@@ -721,7 +752,10 @@ async function handleProfileSave(e) {
         showAlert('globalAlert', 'success', `Profile ${profileId ? 'updated' : 'created'} successfully!`);
         closeModal('profileModal');
         await loadProfiles();
+    } else if (result) { // Handle cases where result exists but success is false
+        showAlert('globalAlert', 'danger', result.message);
     }
+    // If result is null, apiCall already showed an error.
 }
 
 async function deleteUser(username) {
@@ -836,7 +870,11 @@ function showAlert(elementId, type, message) {
     alert.className = `alert alert-${type}`;
     alert.innerHTML = message;
     alert.style.display = 'block';
-    setTimeout(() => { alert.style.display = 'none'; }, 5000);
+    // Remove automatic timeout
+    // setTimeout(() => { alert.style.display = 'none'; }, 5000);
+
+    // Add onclick listener to hide the alert
+    alert.onclick = function() { this.style.display = 'none'; };
 }
 
 let spinnerTimeout;
@@ -848,12 +886,15 @@ function showGlobalSpinner(show) {
     if (show) {
         statusEl.innerHTML = '<span class="loading-spinner"></span>';
     } else {
+        console.log('showGlobalSpinner(false) called');
         // Delay hiding spinner to prevent flickering on fast calls
         spinnerTimeout = setTimeout(() => {
+            console.log('showGlobalSpinner timeout function running. Current statusEl.innerHTML:', statusEl.innerHTML);
             if (statusEl.innerHTML.includes('spinner')) {
                 // If it's still a spinner, default to disconnected
-                statusEl.innerHTML = `<i class="fas fa-exclamation-triangle"></i><span> Disconnected</span>`;
-                statusEl.className = 'disconnected';
+                console.warn('Spinner timeout: Would have set status to Disconnected here. Current innerHTML for statusEl is:', statusEl.innerHTML);
+                // statusEl.innerHTML = `<i class="fas fa-exclamation-triangle"></i><span> Disconnected</span>`; // Commenting out for now
+                // statusEl.className = 'disconnected'; // Commenting out for now
             }
         }, 250);
     }
