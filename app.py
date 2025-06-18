@@ -106,31 +106,136 @@ class ConfigLoader:
         with open(self.config_file, 'w') as f:
             json.dump(self.config, f, indent=4)
 
+    def reset_mikrotik_config_to_defaults(self):
+        """Resets the Mikrotik part of the configuration to its original defaults."""
+        # Get the original default settings as defined in _load_config
+        # This is a bit indirect; _load_config itself returns a merged config.
+        # For true defaults, we define it here or access a pristine default structure.
+        # Let's re-fetch default structure as defined in _load_config's initial state.
+        original_default_settings = { # Replicating the default structure from _load_config
+            "host": "192.168.88.1",
+            "port": 8728,
+            "username": "admin",
+            "password": "",
+            "use_ssl": False,
+            "hotspot_login_url": "http://hotspot.setup/login"
+        }
+        # The server part of the config should remain untouched by this.
+        current_server_config = self.config.get('server', {})
+
+        update_payload = {
+            'mikrotik': original_default_settings,
+            'server': current_server_config # Ensure server settings are preserved
+        }
+        # Instead of self.update_config which merges, we want to overwrite mikrotik section
+        # and keep server section. So, construct the full new config.
+        self.config['mikrotik'] = original_default_settings
+        # self.config['server'] is already what it should be.
+
+        with open(self.config_file, 'w') as f:
+            json.dump(self.config, f, indent=4)
+        logger.info("Mikrotik configuration has been reset to defaults.")
+
+
 # Initialize ConfigLoader
 config_loader = ConfigLoader()
 app_config = config_loader.get_config()
 
+# Define exempt endpoints that do not require a Mikrotik connection
+EXEMPT_ENDPOINTS = {'login_page', 'initial_connect', 'static'} # 'static' is Flask's default for static files
+
+@app.before_request
+def require_mikrotik_connection():
+    logger.debug(f"before_request: endpoint='{request.endpoint}', path='{request.path}'")
+    # If the requested endpoint is exempt, do nothing.
+    if request.endpoint in EXEMPT_ENDPOINTS:
+        logger.debug(f"before_request: Endpoint '{request.endpoint}' is exempt. Allowing request.")
+        return
+
+    # For specific file requests that might not have typical endpoints (e.g. favicon.ico)
+    # This is a bit of a catch-all; ideally, static assets are handled by 'static' endpoint.
+    # This check should ideally be more specific or rely on Flask's static handling.
+    if '.' in request.path and not request.endpoint: # request.endpoint might be None for unhandled paths
+        logger.debug(f"before_request: Path '{request.path}' appears to be a file request and has no specific endpoint. Allowing.")
+        return
+
+    logger.debug(f"before_request: Endpoint '{request.endpoint}' requires Mikrotik connection check.")
+    # Try to establish a connection. get_mikrotik_api will return None on failure.
+    api = get_mikrotik_api()
+    if api is None:
+        logger.warning(f"No active Mikrotik connection for endpoint '{request.endpoint}'. API is None. Redirecting to login.")
+        # Using url_for with the function name of the route
+        return redirect(url_for('login_page'))
+        # The 'login_page' is the function name for the @app.route('/') route.
+    else:
+        logger.debug(f"before_request: Mikrotik API obtained for endpoint '{request.endpoint}'. Allowing request.")
+        # Explicitly return None, which means the request is allowed to proceed.
+        # Not returning anything (implicit None) is the standard way.
+        return
+
+
+@app.route('/api/logout', methods=['POST'])
+def logout():
+    global app_config
+    logger.info("Processing logout request.")
+    config_loader.reset_mikrotik_config_to_defaults()
+    app_config = config_loader.get_config() # Reload global app_config to reflect reset state
+
+    # Optionally, clear the connection from 'g' if it exists, though
+    # it will be cleared on next request context anyway.
+    if 'mikrotik_api' in g:
+        g.pop('mikrotik_api', None)
+    if 'mikrotik_connection' in g:
+        # Attempt to close if it's a real connection object
+        conn_to_close = g.pop('mikrotik_connection', None)
+        if conn_to_close and hasattr(conn_to_close, 'close'):
+            try:
+                conn_to_close.close()
+                logger.info("Closed active Mikrotik connection from 'g' during logout.")
+            except Exception as e:
+                logger.error(f"Error closing connection from 'g' during logout: {e}")
+
+    logger.info("User logged out, Mikrotik configuration reset to defaults.")
+    return jsonify({'success': True, 'message': 'Logged out successfully.'})
 
 def get_mikrotik_api():
     """Establishes and returns a single Mikrotik API connection per request."""
+    logger.debug(f"get_mikrotik_api: Current Mikrotik config host from module-level app_config: {app_config['mikrotik'].get('host')}")
     if 'mikrotik_api' not in g:
-        mikrotik_config = app_config['mikrotik']
+        logger.debug("get_mikrotik_api: 'mikrotik_api' not in g. Attempting new connection.")
+        # Fetch the latest config directly from the loader instance for new connections
+        current_loaded_config = config_loader.get_config()
+        mikrotik_config = current_loaded_config['mikrotik']
+        logger.debug(f"get_mikrotik_api: Using host from config_loader.get_config(): {mikrotik_config.get('host')}")
+
         host, port, username, password, use_ssl = (
             mikrotik_config['host'], mikrotik_config['port'],
             mikrotik_config['username'], mikrotik_config['password'],
             mikrotik_config.get('use_ssl', False)
         )
-        logger.info(f"Attempting to connect to Mikrotik: {host}:{port}")
+        # Basic check for placeholder/default config before attempting connection
+        if host == "192.168.88.1" and username == "admin" and password == "" and not os.path.exists(config_loader.config_file):
+             logger.warning("get_mikrotik_api: Attempting to connect with default placeholder config and no config file saved yet. Connection will likely fail or use defaults.")
+
+        logger.info(f"Attempting to connect to Mikrotik: {host}:{port} (SSL: {use_ssl})")
         try:
             g.mikrotik_connection = librouteros.connect(
                 host=host, username=username, password=password, port=port, ssl=use_ssl
             )
             g.mikrotik_api = g.mikrotik_connection
-            logger.info("Mikrotik connection established.")
-        except (TrapError, socket.error, Exception) as e:
-            logger.error(f"Mikrotik connection failed: {e}")
-            raise ConnectionError(f"Router connection failed: {e}")
-    return g.mikrotik_api
+            logger.info("Mikrotik connection established in get_mikrotik_api.")
+        except (librouteros.exceptions.LibRouterosError, TrapError, socket.error, ConnectionRefusedError, OSError) as e: # More specific exceptions
+            logger.error(f"Mikrotik connection failed in get_mikrotik_api: {e}")
+            g.mikrotik_api = None # Ensure it's None if connection fails
+        except Exception as e: # Catch any other unexpected error during connection
+            logger.error(f"Unexpected error during Mikrotik connection in get_mikrotik_api: {e}")
+            g.mikrotik_api = None # Ensure it's None
+    else:
+        logger.debug("get_mikrotik_api: Reusing existing Mikrotik API from 'g'.")
+
+    api_to_return = g.get('mikrotik_api', None)
+    logger.debug(f"get_mikrotik_api: Returning API object: {'Exists' if api_to_return else 'None'}")
+    return api_to_return
 
 @app.teardown_appcontext
 def teardown_connection(exception):
@@ -150,6 +255,8 @@ class RouterOSService:
         """Test connection to Mikrotik router."""
         try:
             api = get_mikrotik_api()
+            if api is None:
+                return False, "Connection failed: Could not establish API session. Check config and router status."
             identity_records = list(api.path('system', 'identity').select('name'))
 
             router_name = 'Mikrotik Router'
@@ -168,6 +275,9 @@ class RouterOSService:
         """Get all hotspot users."""
         try:
             api = get_mikrotik_api()
+            if api is None:
+                logger.error("Error getting users: Mikrotik API not available.")
+                return []
             users = list(api.path('ip', 'hotspot', 'user').select(
                 '.id', 'name', 'password', 'profile', 'disabled', 'limit-uptime', 'limit-bytes-total',
                 'uptime', 'bytes-in', 'bytes-out', 'comment', 'limit-bytes-in', 'limit-bytes-out'
@@ -181,6 +291,8 @@ class RouterOSService:
         """Create new hotspot user."""
         try:
             api = get_mikrotik_api()
+            if api is None:
+                return False, "Mikrotik connection not available"
             # Clean up potential None values before sending to router
             valid_user_data = {k: v for k, v in user_data.items() if v is not None}
             api.path('ip', 'hotspot', 'user').add(**valid_user_data)
@@ -193,6 +305,8 @@ class RouterOSService:
         """Edit existing hotspot user."""
         try:
             api = get_mikrotik_api()
+            if api is None:
+                return False, "Mikrotik connection not available"
             users = list(api.path('ip', 'hotspot', 'user').select('.id').where(name=username))
             if not users:
                 return False, "User not found"
@@ -208,6 +322,8 @@ class RouterOSService:
         """Delete hotspot user."""
         try:
             api = get_mikrotik_api()
+            if api is None:
+                return False, "Mikrotik connection not available"
             users = list(api.path('ip', 'hotspot', 'user').select('.id').where(name=username))
             if not users:
                 return False, "User not found"
@@ -223,6 +339,9 @@ class RouterOSService:
         """Get active hotspot sessions."""
         try:
             api = get_mikrotik_api()
+            if api is None:
+                logger.error("Error getting active sessions: Mikrotik API not available.")
+                return []
             sessions = list(api.path('ip', 'hotspot', 'active').select(
                 'user', 'address', 'mac-address', 'uptime', 'bytes-in', 'bytes-out',
                 'session-time-left', 'idle-time', '.id'
@@ -236,6 +355,8 @@ class RouterOSService:
         """Disconnect active user session by its .id."""
         try:
             api = get_mikrotik_api()
+            if api is None:
+                return False, "Mikrotik connection not available"
             api.path('ip', 'hotspot', 'active').remove(active_id)
             return True, "User disconnected successfully"
         except (TrapError, Exception) as e:
@@ -246,6 +367,9 @@ class RouterOSService:
         """Get hotspot user profiles."""
         try:
             api = get_mikrotik_api()
+            if api is None:
+                logger.error("Error getting profiles: Mikrotik API not available.")
+                return []
             profiles = list(api.path('ip', 'hotspot', 'user', 'profile').select(
                 '.id', 'name', 'rate-limit', 'session-timeout', 'shared-users',
                 'mac-cookie-timeout', 'keepalive-timeout'
@@ -259,6 +383,8 @@ class RouterOSService:
         """Creates a new hotspot user profile."""
         try:
             api = get_mikrotik_api()
+            if api is None:
+                return False, "Mikrotik connection not available"
             data_to_add = {k: v for k, v in profile_data.items() if v}
             api.path('ip', 'hotspot', 'user', 'profile').add(**data_to_add)
             return True, f"Profile '{profile_data['name']}' created successfully."
@@ -270,6 +396,8 @@ class RouterOSService:
         """Edits an existing hotspot user profile."""
         try:
             api = get_mikrotik_api()
+            if api is None:
+                return False, "Mikrotik connection not available"
             api.path('ip', 'hotspot', 'user', 'profile').set(**new_data, **{'.id': profile_id})
             return True, "Profile updated successfully."
         except (TrapError, Exception) as e:
@@ -280,6 +408,8 @@ class RouterOSService:
         """Deletes a hotspot user profile."""
         try:
             api = get_mikrotik_api()
+            if api is None:
+                return False, "Mikrotik connection not available"
             api.path('ip', 'hotspot', 'user', 'profile').remove(profile_id)
             return True, "Profile deleted successfully."
         except (TrapError, Exception) as e:
@@ -305,7 +435,16 @@ class RouterOSService:
         """Finds and deletes users who have exceeded their time or data limits."""
         try:
             api = get_mikrotik_api()
+            if api is None: # Check if API connection failed initially
+                return False, "Mikrotik connection not available", 0
+
             users = self.get_hotspot_users()
+            # get_hotspot_users itself will return [] if api was None, so this is safe.
+            # However, if api was None for this call but not for the initial api check,
+            # we might want to re-check. But the current pattern is one api per request.
+            if not users and api is None: # If users list is empty because api became None
+                 return False, "Mikrotik connection not available (users fetch failed)", 0
+
             deleted_count = 0
             errors = []
 
@@ -376,8 +515,75 @@ def generate_qr_code_base64(login_url, username, password):
 
 # --- Flask Routes ---
 @app.route('/')
+def login_page():
+    """Serves the login page."""
+    return send_from_directory(get_base_path(), 'login.html')
+
+@app.route('/dashboard')
 def index():
+    """Serves the main dashboard page."""
+    # TODO: Add authentication check here in a later step
     return send_from_directory(get_base_path(), 'mikrotik_userman_dashboard.html')
+
+@app.route('/api/initial-connect', methods=['POST'])
+def initial_connect():
+    global app_config # Ensure we're updating the global app_config
+    data = request.json
+    host = data.get('host')
+    port = data.get('port')
+    username = data.get('username')
+    password = data.get('password') # Password can be empty
+
+    if not all([host, port is not None, username is not None]): # port can be 0, username can be empty string
+        return jsonify({'success': False, 'message': 'Host, Port, and Username are required.'}), 400
+
+    try:
+        port = int(port)
+        if not (0 <= port <= 65535): # Port 0 is technically valid for OS to pick one
+            raise ValueError("Invalid port number")
+    except ValueError:
+        return jsonify({'success': False, 'message': 'Invalid port number. Must be between 0 and 65535.'}), 400
+
+    logger.info(f"Attempting initial connection to Mikrotik: {host}:{port} with user: {username}")
+    try:
+        # Attempt connection
+        temp_conn = librouteros.connect(
+            host=host,
+            username=username,
+            password=password,
+            port=port,
+            ssl=app_config['mikrotik'].get('use_ssl', False) # Use current SSL setting or default
+        )
+        temp_conn.close() # Close if successful, we just tested it.
+        logger.info("Initial connection test successful.")
+
+        # Update config.json
+        new_mikrotik_config = {
+            "host": host,
+            "port": port,
+            "username": username,
+            "password": password, # Save the password
+            "use_ssl": app_config['mikrotik'].get('use_ssl', False), # Preserve existing SSL setting
+            "hotspot_login_url": app_config['mikrotik'].get('hotspot_login_url', '') # Preserve existing
+        }
+        config_loader.update_config({'mikrotik': new_mikrotik_config})
+        app_config = config_loader.get_config() # Reload app_config to reflect changes
+
+        return jsonify({'success': True, 'message': 'Successfully connected and configuration saved.'})
+
+    except (librouteros.exceptions.LibRouterosError, TrapError, socket.error, ConnectionRefusedError, OSError) as e:
+        logger.error(f"Initial connection failed: {e}")
+        # Sanitize error message for user
+        error_message = str(e)
+        if "authentication failed" in error_message.lower():
+            return jsonify({'success': False, 'message': 'Authentication failed. Please check username and password.'}), 401
+        elif "connection refused" in error_message.lower() or "timed out" in error_message.lower() or "no route to host" in error_message.lower():
+            return jsonify({'success': False, 'message': 'Connection refused or timed out. Check IP address, port, and router firewall.'}), 400
+        return jsonify({'success': False, 'message': f'Connection failed: {e}.'}), 400
+    except Exception as e:
+        logger.error(f"Unexpected error during initial connection: {e}")
+        return jsonify({'success': False, 'message': f'An unexpected error occurred: {e}.'}), 500
+
 
 @app.route('/api/test-connection', methods=['POST'])
 def test_connection():

@@ -150,7 +150,13 @@
             <li><a href="#" class="nav-link" data-tab="sessions"><i class="fas fa-wifi"></i><span>Active Sessions</span></a></li>
             <li><a href="#" class="nav-link" data-tab="maintenance"><i class="fas fa-tools"></i><span>Maintenance</span></a></li>
             <li><a href="#" class="nav-link" data-tab="settings"><i class="fas fa-cog"></i><span>Settings</span></a></li>
+            <li><a href="#" id="logoutButton" class="nav-link"><i class="fas fa-sign-out-alt"></i><span>Logout</span></a></li>
         </ul>
+        <div class="sidebar-footer" style="text-align: center; padding: 15px 10px; font-size: 0.85em; color: #495057; border-top: 1px solid #dee2e6; margin-top: auto;">
+            <p style="margin-bottom: 5px;"><strong>The IT Dad</strong></p>
+            <p style="margin-bottom: 3px; font-size: 0.95em;">+(211) 923 616 820</p>
+            <p style="font-size: 0.95em;"><a href="mailto:justinkulang@gmail.com" style="color: var(--primary-color); text-decoration: none;">justinkulang@gmail.com</a></p>
+        </div>
     </aside>
     <main class="main-content">
         <div class="page-header">
@@ -391,6 +397,13 @@ let currentUsers = [];
 let currentProfiles = [];
 let currentSessions = [];
 
+const logger = { // Simple logger
+    info: console.log,
+    warn: console.warn,
+    error: console.error,
+    debug: console.debug
+};
+
 // --- Init & Navigation ---
 document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.nav-link').forEach(link => {
@@ -422,6 +435,31 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('bulkCreateUserForm').addEventListener('submit', handleBulkCreateUsers);
     document.getElementById('editUserForm').addEventListener('submit', handleEditUser);
     document.getElementById('profileForm').addEventListener('submit', handleProfileSave);
+
+    const logoutButton = document.getElementById('logoutButton');
+    if (logoutButton) {
+        logoutButton.addEventListener('click', async function(event) {
+            event.preventDefault();
+            if (confirm('Are you sure you want to logout?')) {
+                showGlobalSpinner(true); // Show spinner during API call
+                try {
+                    const result = await apiCall('/logout', { method: 'POST' });
+                    if (result && result.success) {
+                        // Spinner will be hidden by page reload/redirect
+                        window.location.href = '/'; // Redirect to login page
+                    } else {
+                        // apiCall already shows an alert on failure via its own catch/showAlert
+                        showGlobalSpinner(false); // Hide spinner if logout failed but page didn't redirect
+                    }
+                } catch (error) {
+                    // This catch is for unexpected errors not handled by apiCall's own try/catch
+                    logger.error("Logout failed unexpectedly:", error);
+                    showAlert('globalAlert', 'danger', 'Logout failed unexpectedly. Please try again.');
+                    showGlobalSpinner(false);
+                }
+            }
+        });
+    }
 });
 
 async function init() {
@@ -451,17 +489,47 @@ async function apiCall(endpoint, options = {}) {
     showGlobalSpinner(true);
     try {
         const response = await fetch(`${API_BASE_URL}/api${endpoint}`, {
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json' }, // We expect to send JSON
             ...options
         });
+
+        const contentType = response.headers.get("content-type");
+
         if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.message || `HTTP error! status: ${response.status}`);
+            // Attempt to parse error as JSON, otherwise use text
+            let errorPayload;
+            if (contentType && contentType.indexOf("application/json") !== -1) {
+                try {
+                    errorPayload = await response.json();
+                } catch (e) {
+                    // If JSON parsing fails even if header says JSON, read as text.
+                    logger.error(`apiCall: Failed to parse JSON error response from ${endpoint} despite Content-Type. Error: ${e}`);
+                    errorPayload = { message: (await response.text()).substring(0,500) || `HTTP error! status: ${response.status}` };
+                }
+            } else {
+                 // If not JSON, capture the text response for the error message
+                const textResponse = await response.text();
+                logger.warn(`apiCall to ${endpoint} received non-JSON error response (type: ${contentType}). Body: ${textResponse.substring(0, 500)}...`);
+                errorPayload = { message: textResponse.substring(0,500) || `HTTP error! status: ${response.status}, non-JSON response.` };
+            }
+            throw new Error(errorPayload.message || `HTTP error! status: ${response.status}`);
         }
+
+        // If response.ok, we still must check content type before parsing
+        if (contentType && contentType.indexOf("application/json") === -1) {
+            const textResponse = await response.text();
+            logger.error(`apiCall to ${endpoint} expected JSON but received ${contentType}. Response body: ${textResponse.substring(0, 500)}...`);
+            throw new Error(`Expected JSON response from server for ${endpoint}, but received ${contentType}.`);
+        }
+
+        // If we reach here, response is OK and content type indicates JSON (or no content type header, assume JSON)
         return await response.json();
     } catch (error) {
-        showAlert('globalAlert', 'danger', error.message);
-        return null;
+        // showAlert is already called by some specific handlers, but a generic one here might be too noisy
+        // For now, let's ensure the error is re-thrown or handled appropriately by the caller.
+        // The existing showAlert in the original catch block is fine.
+        showAlert('globalAlert', 'danger', error.message); // Keep this for now.
+        return null; // Or rethrow error depending on desired handling by callers
     } finally {
         showGlobalSpinner(false);
     }
@@ -469,13 +537,26 @@ async function apiCall(endpoint, options = {}) {
 
 async function checkConnection() {
     const statusEl = document.getElementById('connectionStatus');
-    const result = await apiCall('/test-connection', { method: 'POST' });
+    const result = await apiCall('/test-connection', { method: 'POST' }); // apiCall shows global spinner
+
     if (result && result.success) {
         statusEl.className = 'connected';
         statusEl.innerHTML = `<i class="fas fa-check-circle"></i><span> ${result.message}</span>`;
+
+        // Ensure globalAlert is hidden if it was previously shown for a connection error
+        // (though this scenario is less likely now with upfront login)
+        const globalAlert = document.getElementById('globalAlert');
+        if (globalAlert.textContent.includes("Could not connect")) { // More generic check
+            globalAlert.style.display = 'none';
+        }
     } else {
         statusEl.className = 'disconnected';
-        statusEl.innerHTML = `<i class="fas fa-exclamation-triangle"></i><span> ${result ? result.message : 'Connection Failed'}</span>`;
+        const failureMessage = result ? result.message : 'Connection test failed. Router might be unreachable.';
+        statusEl.innerHTML = `<i class="fas fa-exclamation-triangle"></i><span> ${failureMessage}</span>`;
+        // No longer navigate to settings or show a prominent global alert here.
+        // The before_request hook will handle persistent connection issues by redirecting to login.
+        // A subtle update to connectionStatus is sufficient if testConnection is manually clicked
+        // or if init() runs and somehow the connection dropped since login.
     }
 }
 
@@ -568,7 +649,13 @@ function filterAndDisplayUsers() {
         const isDisabled = user.disabled === 'true';
         const statusMatch = (status === '') || (status === 'active' && !isDisabled) || (status === 'disabled' && isDisabled);
         const profileMatch = (profile === '') || (user.profile === profile);
-        const searchMatch = (user.name.toLowerCase().includes(search) || (user.comment && user.comment.toLowerCase().includes(search)));
+
+        // Robust handling for searchMatch
+        const userNameString = typeof user.name === 'string' ? user.name : '';
+        const userCommentString = typeof user.comment === 'string' ? user.comment : '';
+        // 'search' is already toLowerCase() from where it's defined.
+        const searchMatch = (userNameString.toLowerCase().includes(search) ||
+                             (user.comment && userCommentString.toLowerCase().includes(search)));
         return statusMatch && profileMatch && searchMatch;
     });
     
