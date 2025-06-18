@@ -198,6 +198,182 @@ def logout():
     logger.info("User logged out, Mikrotik configuration reset to defaults.")
     return jsonify({'success': True, 'message': 'Logged out successfully.'})
 
+def _generate_vouchers_page_html(vouchers: list, hotspot_login_url: str, include_print_button: bool = True) -> str:
+    """
+    Generates the HTML content for displaying a batch of vouchers.
+    Can optionally include a print button.
+    """
+    # --- Start of HTML content generation ---
+    html_parts = ["""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Generated Vouchers</title>
+        <style>
+            body { font-family: 'Segoe UI', sans-serif; margin: 0; padding: 10px; background-color: #f4f4f9; display: flex; flex-direction: column; align-items: center; }
+            .controls { margin-bottom: 20px; padding: 10px; background-color: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+            .controls button { padding: 8px 15px; font-size: 1em; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 4px; }
+            .controls button:hover { background-color: #0056b3; }
+            .voucher-container {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+                gap: 15px;
+                width: 100%;
+                max-width: 1800px; /* Adjust based on typical paper width for printing, e.g., A4 landscape might fit 3-4 across */
+            }
+            .voucher {
+                background: white;
+                border: 1px solid #ccc;
+                border-radius: 10px;
+                padding: 15px;
+                page-break-inside: avoid;
+                display: flex;
+                flex-direction: row; /* Align items in a row */
+                justify-content: space-between; /* Space out details and QR */
+                align-items: center; /* Center items vertically */
+                box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+                min-height: 100px; /* Ensure a minimum height */
+            }
+            .voucher-details { flex-grow: 1; }
+            .voucher-qr {
+                flex-shrink: 0;
+                width: 100px; /* Fixed size for QR code */
+                height: 100px;
+                margin-left: 15px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .voucher-qr img { max-width: 100%; max-height: 100%; }
+            .voucher-header h3 { margin: 0 0 10px 0; font-size: 1.1em; color: #333; border-bottom: 1px dashed #eee; padding-bottom: 5px; }
+            .credentials p { font-size: 1em; margin: 5px 0; }
+            .credentials strong { color: #555; }
+            .credentials span {
+                font-family: 'Courier New', monospace;
+                background: #f0f0f0;
+                padding: 2px 5px;
+                border-radius: 4px;
+                color: #d63384; /* Hot pink for visibility */
+                font-weight: bold;
+            }
+            @media print {
+                body { margin: 10mm; padding: 0; background-color: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+                .controls { display: none !important; } /* Hide controls when printing */
+                .voucher-container {
+                    max-width: 100%; /* Use full width for printing */
+                    gap: 10px; /* Reduce gap for printing */
+                }
+                .voucher {
+                    box-shadow: none;
+                    border: 1px dashed #999;
+                    /* Consider adjusting padding/margins for print density */
+                }
+            }
+        </style>
+    </head>
+    <body>
+    """]
+
+    if include_print_button:
+        html_parts.append("""
+        <div class="controls">
+            <button onclick="window.print();">Print Vouchers</button>
+        </div>
+        """)
+
+    html_parts.append('<div class="voucher-container">')
+
+    for voucher in vouchers:
+        username = voucher.get('username', 'N/A')
+        password = voucher.get('password', 'N/A')
+        qr_code_b64 = None
+        if QRCODE_AVAILABLE and hotspot_login_url:
+            try:
+                qr_code_b64 = generate_qr_code_base64(hotspot_login_url, username, password)
+            except Exception as e:
+                logger.error(f"Error generating QR code for {username}: {e}")
+
+        html_parts.append(f"""
+        <div class="voucher">
+            <div class="voucher-details">
+                <div class="voucher-header"><h3>Access Voucher</h3></div>
+                <div class="credentials">
+                    <p><strong>Username:</strong> <span>{username}</span></p>
+                    <p><strong>Password:</strong> <span>{password}</span></p>
+                </div>
+            </div>
+        """)
+        if qr_code_b64:
+            html_parts.append(f'<div class="voucher-qr"><img src="data:image/png;base64,{qr_code_b64}" alt="QR Code for {username}"></div>')
+        else:
+            html_parts.append('<div class="voucher-qr" style="font-size:0.8em; color:#aaa;"><span>QR N/A</span></div>')
+        html_parts.append("</div>") # Close voucher div
+
+    html_parts.append("""
+        </div> <!-- Close voucher-container -->
+    </body>
+    </html>
+    """)
+    return "".join(html_parts)
+
+
+@app.route('/api/vouchers/view_batch_html', methods=['POST'])
+def view_batch_vouchers_html():
+    try:
+        vouchers_json = request.form.get('vouchers_json', '[]')
+        hotspot_login_url = request.form.get('hotspot_login_url', '')
+        vouchers = json.loads(vouchers_json)
+
+        if not vouchers:
+            return Response("No voucher data provided.", mimetype='text/html', status=400)
+
+        html_content = _generate_vouchers_page_html(vouchers, hotspot_login_url, include_print_button=True)
+        return Response(html_content, mimetype='text/html')
+
+    except json.JSONDecodeError:
+        logger.error("Failed to decode vouchers_json from form data.")
+        return Response("Invalid voucher data provided.", mimetype='text/html', status=400)
+    except Exception as e:
+        logger.error(f"Error generating voucher HTML view: {e}")
+        return Response(f"An error occurred while generating vouchers: {e}", mimetype='text/html', status=500)
+
+@app.route('/api/vouchers/download_batch_pdf', methods=['POST'])
+def download_batch_vouchers_pdf():
+    if not WEASYPRINT_AVAILABLE:
+        logger.warning("PDF export attempted but WeasyPrint is not available.")
+        return jsonify({'success': False, 'message': 'PDF generation library not available on the server.'}), 501
+
+    try:
+        vouchers_json = request.form.get('vouchers_json', '[]')
+        hotspot_login_url = request.form.get('hotspot_login_url', '')
+        vouchers = json.loads(vouchers_json)
+
+        if not vouchers:
+            return jsonify({'success': False, 'message': 'No voucher data provided.'}), 400
+
+        # Generate HTML without the print button for PDF rendering
+        html_content = _generate_vouchers_page_html(vouchers, hotspot_login_url, include_print_button=False)
+
+        pdf_file = WeasyHTML(string=html_content).write_pdf()
+
+        return Response(
+            pdf_file,
+            mimetype="application/pdf",
+            headers={"Content-disposition": "attachment; filename=vouchers_batch.pdf"}
+        )
+    except json.JSONDecodeError:
+        logger.error("Failed to decode vouchers_json for PDF export.")
+        return jsonify({'success': False, 'message': 'Invalid voucher data provided for PDF export.'}), 400
+    except Exception as e:
+        logger.error(f"Error generating voucher PDF: {e}")
+        # Check if it's a WeasyPrint specific error that might hint at system dependencies
+        if "No X11 connection" in str(e) or "GTK" in str(e):
+             logger.error("WeasyPrint PDF generation failed, possibly due to missing X11/GTK dependencies on the server.")
+             return jsonify({'success': False, 'message': 'PDF generation failed on server due to missing dependencies. Please check server logs.'}), 500
+        return jsonify({'success': False, 'message': f'An unexpected error occurred during PDF generation: {str(e)}'}), 500
+
 def get_mikrotik_api():
     """Establishes and returns a single Mikrotik API connection per request."""
     logger.debug(f"get_mikrotik_api: Current Mikrotik config host from module-level app_config: {app_config['mikrotik'].get('host')}")
@@ -638,23 +814,53 @@ def bulk_create_users():
     username_length = int(data.get('username_length', 6))
     password_length = int(data.get('password_length', 8))
 
+    # New parameters for voucher generation
+    username_prefix = data.get('username_prefix', '')
+    username_charset_key = data.get('username_charset', 'alphanumeric')
+    password_charset_key = data.get('password_charset', 'alphanumeric_symbols')
+    comment_for_batch = data.get('comment_prefix', '') # This is now the batch name/comment
+
     if not all([number_of_users, profile]):
         return jsonify({'success': False, 'message': 'Number of users and profile are required.'}), 400
+    if int(number_of_users) <= 0:
+        return jsonify({'success': False, 'message': 'Number of users must be positive.'}), 400
 
-    base_user_data = {k: v for k, v in data.items() if k not in ['number_of_users', 'username_length', 'password_length'] and v}
+    # Define character sets
+    safe_symbols = '!@#$%^&*-=+' # Define a set of symbols considered safe for passwords
+    charsets = {
+        'alphanumeric': string.ascii_letters + string.digits,
+        'alphanumeric_upper': string.ascii_uppercase + string.digits,
+        'alphanumeric_lower': string.ascii_lowercase + string.digits,
+        'numeric': string.digits,
+        'alpha_upper': string.ascii_uppercase,
+        'alpha_lower': string.ascii_lowercase,
+        'alphanumeric_symbols': string.ascii_letters + string.digits + safe_symbols
+    }
+
+    username_chars = charsets.get(username_charset_key, charsets['alphanumeric'])
+    password_chars = charsets.get(password_charset_key, charsets['alphanumeric_symbols'])
+
+    # Base user data, excluding what's generated per user or specific to bulk operation
+    # Ensure only valid Mikrotik parameters are passed by being more selective or cleaning later
+    base_user_data_keys = ['profile', 'limit-uptime', 'limit-bytes-total', 'server'] # server is a common param for hotspot users
+    base_user_data = {k: data[k] for k in base_user_data_keys if k in data and data[k]}
+
 
     created_credentials = []
     errors = []
     
     for _ in range(int(number_of_users)):
-        username = ''.join(random.choices(string.ascii_letters + string.digits, k=username_length))
-        password = ''.join(random.choices(string.ascii_letters + string.digits, k=password_length))
+        random_username_part = ''.join(random.choices(username_chars, k=username_length))
+        username = username_prefix + random_username_part
+        password = ''.join(random.choices(password_chars, k=password_length))
         
         user_data = base_user_data.copy()
         user_data['name'] = username
         user_data['password'] = password
-        if data.get('comment_prefix'):
-            user_data['comment'] = f"{data['comment_prefix']}{username}"
+
+        if comment_for_batch: # Use the batch comment if provided
+            user_data['comment'] = comment_for_batch
+        # else, no comment is set for the user
 
         success, msg = router_os_service.create_hotspot_user(user_data)
         if success:

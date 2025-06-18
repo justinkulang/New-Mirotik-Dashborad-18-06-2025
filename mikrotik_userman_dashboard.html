@@ -255,22 +255,52 @@
                 </form>
             </div>
             <div class="panel">
-                <h3 class="panel-header">Bulk Generate Users</h3>
+                <h3 class="panel-header">Batch Voucher Generation</h3>
                 <form id="bulkCreateUserForm">
                      <div class="form-grid">
-                        <div class="form-group"><label for="bulkNumberOfUsers">Number of Users</label><input type="number" id="bulkNumberOfUsers" required></div>
+                        <div class="form-group"><label for="bulkNumberOfUsers">Number of Vouchers</label><input type="number" id="bulkNumberOfUsers" required></div>
                         <div class="form-group"><label for="bulkProfile">Profile</label><select id="bulkProfile" required></select></div>
-                        <div class="form-group"><label for="bulkTimeLimit">Time Limit</label><input type="text" id="bulkTimeLimit" placeholder="e.g., 2h"></div>
+                        <div class="form-group"><label for="bulkTimeLimit">Time Limit</label><input type="text" id="bulkTimeLimit" placeholder="e.g., 2h, 30d"></div>
                         <div class="form-group"><label for="bulkDataLimit">Total Data Limit (MB)</label><input type="number" id="bulkDataLimit" placeholder="e.g., 1024"></div>
-                        <div class="form-group"><label for="bulkCommentPrefix">Comment Prefix</label><input type="text" id="bulkCommentPrefix" placeholder="e.g., Event2025-"></div>
-                        <div class="form-group"><label for="bulkUsernameLength">Username Length</label><input type="number" id="bulkUsernameLength" value="6"></div>
+                        <div class="form-group"><label for="bulkCommentPrefix">Batch Name / Comment Prefix</label><input type="text" id="bulkCommentPrefix" placeholder="e.g., Event2024"></div>
+                        <div class="form-group"><label for="bulkUsernamePrefix">Username Prefix (Optional)</label><input type="text" id="bulkUsernamePrefix" placeholder="e.g., v-"></div>
+                        <div class="form-group"><label for="bulkUsernameLength">Username Length (after prefix)</label><input type="number" id="bulkUsernameLength" value="6"></div>
                         <div class="form-group"><label for="bulkPasswordLength">Password Length</label><input type="number" id="bulkPasswordLength" value="6"></div>
+                        <div class="form-group">
+                            <label for="bulkUsernameCharset">Username Characters</label>
+                            <select id="bulkUsernameCharset">
+                                <option value="alphanumeric" selected>Alphanumeric (Upper & Lower)</option>
+                                <option value="alphanumeric_upper">Alphanumeric (Upper Case Only)</option>
+                                <option value="alphanumeric_lower">Alphanumeric (Lower Case Only)</option>
+                                <option value="numeric">Numeric Only</option>
+                                <option value="alpha_upper">Alphabetical (Upper Case Only)</option>
+                                <option value="alpha_lower">Alphabetical (Lower Case Only)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="bulkPasswordCharset">Password Characters</label>
+                            <select id="bulkPasswordCharset">
+                                <option value="alphanumeric_symbols" selected>Alphanumeric + Symbols</option>
+                                <option value="alphanumeric">Alphanumeric (Upper & Lower)</option>
+                                <option value="alphanumeric_upper">Alphanumeric (Upper Case Only)</option>
+                                <option value="alphanumeric_lower">Alphanumeric (Lower Case Only)</option>
+                                <option value="numeric">Numeric Only</option>
+                                <option value="alpha_upper">Alphabetical (Upper Case Only)</option>
+                                <option value="alpha_lower">Alphabetical (Lower Case Only)</option>
+                            </select>
+                        </div>
                     </div>
-                    <button type="submit" class="btn btn-success"><i class="fas fa-users-cog"></i> Generate Users</button>
+                    <button type="submit" class="btn btn-success"><i class="fas fa-users-cog"></i> Generate Vouchers</button>
                 </form>
                 <div id="bulkCreateResultDisplay" style="display:none; margin-top: 1.5rem;">
                     <h4>Generated Credentials:</h4>
                     <textarea id="bulkCreateCredentials" rows="8" class="form-group" style="width:100%; font-family: monospace;" readonly></textarea>
+                    <button id="exportVouchersHTMLButton" class="btn btn-info" style="margin-top: 10px; display: none;">
+                        <i class="fas fa-eye"></i> View Vouchers (HTML)
+                    </button>
+                    <button id="exportVouchersPDFButton" class="btn btn-danger" style="margin-top: 10px; margin-left: 10px; display: none;">
+                        <i class="fas fa-file-pdf"></i> Download Vouchers (PDF)
+                    </button>
                 </div>
             </div>
         </div>
@@ -396,6 +426,7 @@ const API_BASE_URL = ''; // Same origin
 let currentUsers = [];
 let currentProfiles = [];
 let currentSessions = [];
+let lastGeneratedBatchCredentials = []; // To store the last batch of generated credentials
 
 const logger = { // Simple logger
     info: console.log,
@@ -458,6 +489,80 @@ document.addEventListener('DOMContentLoaded', () => {
                     showGlobalSpinner(false);
                 }
             }
+        });
+    }
+
+    const exportHTMLButton = document.getElementById('exportVouchersHTMLButton');
+    if (exportHTMLButton) {
+        exportHTMLButton.addEventListener('click', function() {
+            if (!lastGeneratedBatchCredentials || lastGeneratedBatchCredentials.length === 0) {
+                showAlert('globalAlert', 'warning', 'No generated voucher data available to view.');
+                return;
+            }
+            const hotspotLoginUrlValue = document.getElementById('hotspotLoginUrl').value;
+            if (!hotspotLoginUrlValue) {
+                 showAlert('globalAlert', 'warning', 'Hotspot Login URL is not set in Settings (under the Settings Tab). QR Codes cannot be generated for viewing if this is missing.');
+                // Allow to proceed if user wants to view without QR, backend will handle missing URL for QR.
+            }
+
+            // Create a form to POST data to the new tab/window
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = `${API_BASE_URL}/api/vouchers/view_batch_html`;
+            form.target = '_blank'; // Open in a new tab
+
+            const vouchersInput = document.createElement('input');
+            vouchersInput.type = 'hidden';
+            vouchersInput.name = 'vouchers_json';
+            vouchersInput.value = JSON.stringify(lastGeneratedBatchCredentials);
+            form.appendChild(vouchersInput);
+
+            const loginUrlInput = document.createElement('input');
+            loginUrlInput.type = 'hidden';
+            loginUrlInput.name = 'hotspot_login_url';
+            loginUrlInput.value = hotspotLoginUrlValue; // Send even if empty, backend can decide
+            form.appendChild(loginUrlInput);
+
+            document.body.appendChild(form);
+            form.submit();
+            document.body.removeChild(form);
+        });
+    }
+
+    const exportPDFButton = document.getElementById('exportVouchersPDFButton');
+    if (exportPDFButton) {
+        exportPDFButton.addEventListener('click', function() {
+            if (!lastGeneratedBatchCredentials || lastGeneratedBatchCredentials.length === 0) {
+                showAlert('globalAlert', 'warning', 'No generated voucher data available for PDF export.');
+                return;
+            }
+            const hotspotLoginUrlValue = document.getElementById('hotspotLoginUrl').value;
+            // Warning for missing login URL (for QR codes) can be helpful, but proceed anyway.
+            // Backend will handle missing QR codes if URL isn't provided.
+            if (!hotspotLoginUrlValue && QRCODE_AVAILABLE) { // QRCODE_AVAILABLE is a global JS var set by backend
+                 showAlert('globalAlert', 'info', 'Hotspot Login URL is not set in Settings. QR Codes will be omitted in the PDF.');
+            }
+
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = `${API_BASE_URL}/api/vouchers/download_batch_pdf`;
+            // No target=_blank needed, as this should trigger a file download in the current tab.
+
+            const vouchersInput = document.createElement('input');
+            vouchersInput.type = 'hidden';
+            vouchersInput.name = 'vouchers_json';
+            vouchersInput.value = JSON.stringify(lastGeneratedBatchCredentials);
+            form.appendChild(vouchersInput);
+
+            const loginUrlInput = document.createElement('input');
+            loginUrlInput.type = 'hidden';
+            loginUrlInput.name = 'hotspot_login_url';
+            loginUrlInput.value = hotspotLoginUrlValue;
+            form.appendChild(loginUrlInput);
+
+            document.body.appendChild(form);
+            form.submit();
+            document.body.removeChild(form);
         });
     }
 });
@@ -751,21 +856,50 @@ async function handleBulkCreateUsers(e) {
         profile: document.getElementById('bulkProfile').value,
         'limit-uptime': document.getElementById('bulkTimeLimit').value || null,
         'limit-bytes-total': document.getElementById('bulkDataLimit').value ? parseInt(document.getElementById('bulkDataLimit').value) * 1024 * 1024 : null,
-        comment_prefix: document.getElementById('bulkCommentPrefix').value,
+        comment_prefix: document.getElementById('bulkCommentPrefix').value, // This is the batch name/comment
+        username_prefix: document.getElementById('bulkUsernamePrefix').value,
         username_length: parseInt(document.getElementById('bulkUsernameLength').value),
+        username_charset: document.getElementById('bulkUsernameCharset').value,
         password_length: parseInt(document.getElementById('bulkPasswordLength').value),
+        password_charset: document.getElementById('bulkPasswordCharset').value
     };
+
+    const exportHTMLBtn = document.getElementById('exportVouchersHTMLButton');
+    const exportPDFBtn = document.getElementById('exportVouchersPDFButton');
+    const resultDisplayDiv = document.getElementById('bulkCreateResultDisplay');
+    const credentialsTextArea = document.getElementById('bulkCreateCredentials');
+
+    // Always hide buttons and result display initially on new submission
+    if(exportHTMLBtn) exportHTMLBtn.style.display = 'none';
+    if(exportPDFBtn) exportPDFBtn.style.display = 'none';
+    resultDisplayDiv.style.display = 'none';
+    credentialsTextArea.value = '';
+    lastGeneratedBatchCredentials = []; // Clear previous batch
+
+
     const result = await apiCall('/bulk-create-users', { method: 'POST', body: JSON.stringify(payload) });
     if (result) {
         showAlert('globalAlert', result.success ? 'success' : 'danger', result.message);
         if (result.created_credentials && result.created_credentials.length > 0) {
-            document.getElementById('bulkCreateResultDisplay').style.display = 'block';
-            document.getElementById('bulkCreateCredentials').value = result.created_credentials
+            lastGeneratedBatchCredentials = result.created_credentials; // Store for printing/viewing
+            resultDisplayDiv.style.display = 'block';
+            credentialsTextArea.value = result.created_credentials
                 .map(c => `Username: ${c.username}\tPassword: ${c.password}`)
                 .join('\n');
-            await loadUsers();
-            await loadDashboardStats();
+            if(exportHTMLBtn) exportHTMLBtn.style.display = 'inline-flex';
+            if(exportPDFBtn) exportPDFBtn.style.display = 'inline-flex';
+            await loadUsers(); // Refresh user list as new users were added
+            await loadDashboardStats(); // Refresh stats
+        } else {
+            // Ensure buttons are hidden if no credentials or error
+            if(exportHTMLBtn) exportHTMLBtn.style.display = 'none';
+            if(exportPDFBtn) exportPDFBtn.style.display = 'none';
         }
+    } else {
+        // If apiCall returns null (e.g. network error), ensure buttons and results area are hidden
+        if(exportHTMLBtn) exportHTMLBtn.style.display = 'none';
+        if(exportPDFBtn) exportPDFBtn.style.display = 'none';
+        resultDisplayDiv.style.display = 'none';
     }
 }
 
